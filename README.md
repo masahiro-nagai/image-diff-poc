@@ -164,17 +164,71 @@ python test_io.py
 ```
 image-diff-poc/
 ├── .venv/                  # 仮想環境（git 管理外）
-├── image_diff/             # I/O・解析ライブラリ
+├── image_diff/             # ライブラリ本体
 │   ├── __init__.py
-│   └── io.py               # load_bgra, validate_pair
-├── output/                 # test_env.py の出力先
-│   └── test.png
+│   ├── io.py               # load_bgra, validate_pair
+│   └── diff.py             # DiffExtractor, DiffResult
+├── output/                 # 出力先
+│   ├── test.png
+│   ├── diff_mask.png       # 差分 2値マスク
+│   └── diff_overlay.png    # 差分オーバーレイ画像
 ├── samples/                # ダミー画像
 │   ├── before.png
 │   └── after.png
-├── generate_dummies.py     # ダミー画像生成スクリプト
-├── test_env.py             # 環境確認スクリプト
-├── test_io.py              # I/O モジュール検証
-├── requirements.txt        # 依存ライブラリ一覧
+├── generate_dummies.py
+├── test_env.py
+├── test_io.py
+├── test_diff.py            # DiffExtractor 検証
+├── requirements.txt
 └── README.md
 ```
+
+### 差分抽出モジュール (`image_diff/diff.py`)
+
+```bash
+python test_diff.py
+```
+
+```python
+from image_diff.diff import DiffExtractor
+
+extractor = DiffExtractor(thresh=10, blur_ksize=5, ssim_min=0.98)
+result = extractor.extract_diff("samples/before.png", "samples/after.png")
+
+print(f"diff_score : {result.diff_score:.4f}")   # 有効ピクセル内の差分率
+print(f"ssim_score : {result.ssim_score:.6f}")   # 構造類似度 (1.0=完全一致)
+# result.diff_mask : shape=(H,W), dtype=uint8, 差分あり=255
+```
+
+## 差分抽出の狙いと限界
+
+### 狙い
+
+| ステップ | 目的 |
+|---|---|
+| GaussianBlur | 圧縮ノイズ・サブピクセル揺れを除去して False Positive を減らす |
+| SSIM チェック | 大局的な構造変化を事前に検出。閾値割れで WARNING |
+| absdiff + threshold | RGB レベルの画素差分を 2 値化 |
+| alpha OR マスク | どちらか一方でも不透明な領域を有効範囲とし、透明→不透明変化も検出 |
+
+### 限界（False Positive / False Negative が出るケース）
+
+#### ① アンチエイリアス (AA) の揺れ
+フォント・曲線のエッジ付近では jpeg/png の圧縮アーティファクトにより
+サブピクセル単位でRGBが変化する。`blur_ksize` や `thresh` を上げれば軽減できるが、
+微細な差分の見落とし（False Negative）とのトレードオフになる。
+
+#### ② 透明領域の RGB 揺れ
+PNG の alpha=0 ピクセルは「視覚的に透明」だが、RGB 値はソフトウェアによって
+任意の値が入る場合がある（例: Photoshop は 0,0,0、Figma は元色を保存）。
+alpha=0 の領域は有効マスクで除外しているため影響は限定的だが、
+alpha が 1-254 の半透明ピクセルでは RGB 揺れが差分として現れる。
+
+#### ③ alpha AND 問題（設計上の注意点）
+`_get_valid_mask` が **OR** である理由:
+before=透明/after=不透明 という「見切れ・追加要素」を正しく差分として拾うため。
+**AND** にすると「両方で不透明な領域のみ」に限定され、
+透明→不透明の変化（右端見切れ等）が全消滅する。
+
+> **対処**: 背景が完全に透明な PNG で before/after を比較するときは必ず OR マスクを使うこと。
+
