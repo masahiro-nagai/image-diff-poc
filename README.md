@@ -104,11 +104,69 @@ b = img_after.astype(np.int16)
 diff = np.abs(a - b)
 ```
 
+### I/O モジュール (`image_diff/io.py`)
+
+```bash
+python test_io.py
+```
+
+```python
+from image_diff.io import load_bgra, validate_pair
+
+# 単体読み込み: 常に BGRA (H, W, 4), dtype=uint8 で返る
+img = load_bgra("samples/before.png")
+
+# ペア検証: サイズ不一致なら ValueError を送出
+before, after = validate_pair("samples/before.png", "samples/after.png")
+```
+
+## ハマりポイント
+
+### ① alpha 落ち（`IMREAD_UNCHANGED` 忘れ）
+
+```python
+# NG: alpha が切り捨てられて shape=(H,W,3) になる
+img = cv2.imread("samples/before.png")
+
+# OK: shape=(H,W,4) で読み込まれる
+img = cv2.imread("samples/before.png", cv2.IMREAD_UNCHANGED)
+```
+
+> `load_bgra()` は必ず `IMREAD_UNCHANGED` を使うため、呼び出し側が意識する必要はない。
+> ただし **直接 `cv2.imread` を書く場合は必ず指定すること**。
+
+### ② dtype ミス（演算時の uint8 オーバーフロー）
+
+```python
+# 危険: uint8 のまま引き算すると 0-1=255 になる（アンダーフロー）
+diff = after - before          # NG
+
+# 安全: int16 に拡張してから計算し、最後に uint8 に戻す
+diff = after.astype(np.int16) - before.astype(np.int16)   # OK
+diff_abs = np.clip(np.abs(diff), 0, 255).astype(np.uint8)
+```
+
+### ③ 仮想環境でカレントディレクトリを見失ったとき
+
+`import image_diff` が `ModuleNotFoundError` になるのはほぼカレントディレクトリがズレている。
+
+```bash
+# 症状: ModuleNotFoundError: No module named 'image_diff'
+# 対処: プロジェクトルートに戻る
+cd /path/to/image-diff-poc
+python test_io.py
+```
+
+`image-diff-poc/` を起点にしてスクリプトを実行することを**常に意識**すること。
+
 ## ディレクトリ構成
 
 ```
 image-diff-poc/
 ├── .venv/                  # 仮想環境（git 管理外）
+├── image_diff/             # I/O・解析ライブラリ
+│   ├── __init__.py
+│   └── io.py               # load_bgra, validate_pair
 ├── output/                 # test_env.py の出力先
 │   └── test.png
 ├── samples/                # ダミー画像
@@ -116,6 +174,7 @@ image-diff-poc/
 │   └── after.png
 ├── generate_dummies.py     # ダミー画像生成スクリプト
 ├── test_env.py             # 環境確認スクリプト
+├── test_io.py              # I/O モジュール検証
 ├── requirements.txt        # 依存ライブラリ一覧
 └── README.md
 ```
