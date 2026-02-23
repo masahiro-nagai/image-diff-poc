@@ -15,7 +15,73 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 実行例
+## PoC デモ（最短手順）
+
+```bash
+source .venv/bin/activate
+
+# ① ダミー画像生成（初回のみ）
+python generate_dummies.py
+
+# ② CLI で差分抽出 → ハイライト画像 + CSV 生成
+python -m image_diff \
+    --before samples/before.png \
+    --after  samples/after.png  \
+    --output output/
+```
+
+出力例:
+```
+[WARNING] SSIM=0.8522 < ssim_min=0.9800. 大きな構造変化が検出されました。
+❌  verdict    : FAIL
+   diff_score : 0.532123  (53.21%)
+   ssim_score : 0.852193
+
+Output files:
+  highlight  : output/diff_highlight.png
+  report     : output/report.csv
+```
+
+| ファイル | 内容 |
+|---|---|
+| `output/diff_highlight.png` | 差分領域に赤矩形を描画した after 画像 |
+| `output/report.csv` | verdict / diff_score / ssim_score / 理由 |
+
+### CLI オプション一覧
+
+```bash
+python -m image_diff --help
+```
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `--before PATH` | 必須 | 加工前画像 |
+| `--after  PATH` | 必須 | 加工後画像 |
+| `--output DIR`  | `output` | 出力先ディレクトリ |
+| `--thresh N`    | `10` | 差分 2 値化の閾値（0–255） |
+| `--blur N`      | `5` | GaussianBlur カーネルサイズ（奇数） |
+| `--ssim-min F`  | `0.98` | SSIM 警告閾値 |
+
+### 現場調整: `--thresh` の変更
+
+| 状況 | 推奨値 |
+|---|---|
+| 圧縮ノイズが多い JPEG 素材 | `--thresh 20`〜`30` |
+| ピクセル完全一致を期待する PNG | `--thresh 1`〜`5` |
+| デフォルト（バランス） | `--thresh 10`（デフォルト） |
+
+### 終了コード
+
+| コード | 意味 |
+|---|---|
+| `0` | PASS または WARN（明確な差分なし） |
+| `1` | FAIL（diff_score ≥ 1.0%） |
+| `2` | 入力エラー（ファイル不存在など） |
+
+> **パス注意**: `ModuleNotFoundError` が出た場合はカレントディレクトリがズレています。
+> `cd /path/to/image-diff-poc` でルートに戻ってから再実行してください。
+
+## 実行例（個別スクリプト）
 
 ### 環境確認
 
