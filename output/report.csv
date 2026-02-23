@@ -1,0 +1,2 @@
+file_pair,verdict,diff_score,ssim_score,reason,highlight_path,mask_path,overlay_path
+samples/before.png vs samples/after.png,FAIL,0.532123,0.852193,diff_score >= 1.0%: 明確な差分を検出 (score=0.5321),output/diff_highlight.png,output/diff_mask.png,output/diff_overlay.png
