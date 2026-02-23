@@ -197,3 +197,191 @@ class DiffExtractor:
             return 0.0
         diff_count = int(np.count_nonzero(diff_mask))
         return diff_count / valid_count
+
+
+# ======================================================================
+# 拡張チェック機能
+# ======================================================================
+
+@dataclass
+class AlphaCheckResult:
+    """alpha_check の返り値。
+
+    Attributes:
+        destroyed_mask:  透明→不透明に変化したピクセルの 2値マスク (H, W, uint8)。
+        destroyed_count: 変化ピクセル数。
+        blob_count:      connectedComponents で検出した塊（連結成分）の数。
+        blobs:           各塊の情報リスト。各要素は dict(label, area, bbox)。
+                         bbox は (x, y, w, h)。
+        ratio:           有効ピクセル（before の不透明領域）に対する変化率（0.0〜1.0）。
+    """
+    destroyed_mask:  np.ndarray
+    destroyed_count: int
+    blob_count:      int
+    blobs:           list
+    ratio:           float
+
+
+@dataclass
+class ClippingCheckResult:
+    """clipping_check の返り値。
+
+    Attributes:
+        edge_mask:         画像端に接触している差分ピクセルの 2値マスク。
+        edge_touch_ratio:  差分ピクセルのうち端に接触している割合（0.0〜1.0）。
+        has_linear_edge:   approxPolyDP で直線的な輪郭が検出されたか。
+        clipping_score:    端接触率 × 直線判定フラグ（0.0 or edge_touch_ratio）。
+                           1 に近いほど見切れの可能性が高い。
+        detail:            診断テキスト。
+    """
+    edge_mask:        np.ndarray
+    edge_touch_ratio: float
+    has_linear_edge:  bool
+    clipping_score:   float
+    detail:           str
+
+
+def alpha_check(
+    before: np.ndarray,
+    after:  np.ndarray,
+    min_blob_area: int = 9,
+) -> AlphaCheckResult:
+    """透明→不透明に変化したピクセル（アルファ破壊）を検出する。
+
+    アルファ破壊とは: before では alpha=0（透明）だったピクセルが
+    after では alpha>0（不透明）に変化した状態。
+    見切れ・合成ミス・レイヤー設定ミスなどで発生する。
+
+    処理フロー:
+        1. before/after の alpha チャンネルを比較。
+        2. before=0 かつ after>0 なピクセルを検出（destroyed_mask）。
+        3. connectedComponentsWithStats で連結成分ラベリング。
+        4. area < min_blob_area の微小成分を除外してノイズを抑制。
+
+    Args:
+        before:        load_bgra で読んだ BGRA 配列。
+        after:         load_bgra で読んだ BGRA 配列。
+        min_blob_area: この面積未満の塊はノイズとして無視する（ピクセル数）。
+
+    Returns:
+        AlphaCheckResult
+    """
+    alpha_b = before[:, :, 3]
+    alpha_a = after[:, :, 3]
+
+    # 透明→不透明: before=0 かつ after>0
+    destroyed = ((alpha_b == 0) & (alpha_a > 0)).astype(np.uint8) * 255
+
+    # connectedComponentsWithStats で塊を計測
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        destroyed, connectivity=8
+    )
+
+    blobs = []
+    filtered_mask = np.zeros_like(destroyed)
+    for label in range(1, num_labels):  # 0 は背景
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_blob_area:
+            continue  # 微小ノイズを除外
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        w = int(stats[label, cv2.CC_STAT_WIDTH])
+        h = int(stats[label, cv2.CC_STAT_HEIGHT])
+        blobs.append({"label": label, "area": area, "bbox": (x, y, w, h)})
+        filtered_mask[labels == label] = 255
+
+    # 変化率: before OR after の有効ピクセル数を分母（ratio∈[0,1]を保証）
+    # before 限定だと after 側で広く不透明化した場合に ratio>1.0 になるため OR を使う
+    valid_total = int(np.count_nonzero((alpha_b > 0) | (alpha_a > 0)))
+    ratio = int(np.count_nonzero(filtered_mask)) / valid_total if valid_total > 0 else 0.0
+
+    return AlphaCheckResult(
+        destroyed_mask=filtered_mask,
+        destroyed_count=int(np.count_nonzero(filtered_mask)),
+        blob_count=len(blobs),
+        blobs=blobs,
+        ratio=ratio,
+    )
+
+
+def clipping_check(
+    diff_mask:        np.ndarray,
+    edge_width:       int   = 5,
+    linearity_thresh: float = 0.02,
+) -> ClippingCheckResult:
+    """画像端に接触する差分領域（見切れ）を検出する。
+
+    見切れとは: 加工後に画像のコンテンツが端で途切れた状態。
+    特徴:
+        ① 差分ピクセルが画像の端（上下左右 edge_width px 内）に接触している。
+        ② 端付近の差分輪郭が直線的（approxPolyDP による多角形近似で点数が少ない）。
+
+    処理フロー:
+        1. diff_mask から端 edge_width px のストリップを抽出。
+        2. 差分ピクセルが端に接触している割合（edge_touch_ratio）を計算。
+        3. 差分輪郭を approxPolyDP で近似し、4頂点以下なら「直線的」と判定。
+        4. clipping_score = edge_touch_ratio × has_linear_edge。
+
+    Args:
+        diff_mask:        DiffExtractor の diff_mask (H, W, uint8)。
+        edge_width:       端と判定するピクセル幅（デフォルト=5）。
+        linearity_thresh: approxPolyDP の epsilon 係数。
+                          大きいほど近似が粗くなる（デフォルト=0.02）。
+
+    Returns:
+        ClippingCheckResult
+    """
+    H, W = diff_mask.shape[:2]
+
+    # --- ① 端ストリップマスク作成 ---
+    edge_mask = np.zeros_like(diff_mask)
+    edge_mask[:edge_width, :]  = 255  # 上
+    edge_mask[-edge_width:, :] = 255  # 下
+    edge_mask[:, :edge_width]  = 255  # 左
+    edge_mask[:, -edge_width:] = 255  # 右
+
+    # 差分ピクセルのうち端に接触しているもの
+    touch = cv2.bitwise_and(diff_mask, edge_mask)
+    diff_total   = int(np.count_nonzero(diff_mask))
+    touch_count  = int(np.count_nonzero(touch))
+    edge_touch_ratio = touch_count / diff_total if diff_total > 0 else 0.0
+
+    # --- ② approxPolyDP で直線判定 ---
+    contours, _ = cv2.findContours(
+        diff_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    has_linear_edge = False
+    for cnt in contours:
+        perimeter = cv2.arcLength(cnt, closed=True)
+        if perimeter == 0:
+            continue
+        approx = cv2.approxPolyDP(cnt, linearity_thresh * perimeter, closed=True)
+        # 4頂点以下 = 直線的な多角形（矩形や直線）と判定
+        if len(approx) <= 4:
+            has_linear_edge = True
+            break
+
+    # --- ③ clipping_score ---
+    clipping_score = edge_touch_ratio if has_linear_edge else 0.0
+
+    # 診断テキスト
+    parts = []
+    parts.append(f"edge_touch_ratio={edge_touch_ratio:.4f}")
+    parts.append(f"has_linear_edge={has_linear_edge}")
+    parts.append(f"clipping_score={clipping_score:.4f}")
+    if clipping_score > 0.3:
+        parts.append("→ 高確率で見切れあり")
+    elif clipping_score > 0.05:
+        parts.append("→ 端付近に差分あり（要確認）")
+    else:
+        parts.append("→ 見切れの兆候なし")
+    detail = ", ".join(parts)
+
+    return ClippingCheckResult(
+        edge_mask=touch,
+        edge_touch_ratio=edge_touch_ratio,
+        has_linear_edge=has_linear_edge,
+        clipping_score=clipping_score,
+        detail=detail,
+    )
+

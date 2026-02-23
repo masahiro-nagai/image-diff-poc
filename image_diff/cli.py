@@ -20,7 +20,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from image_diff.diff import DiffExtractor
+from image_diff.diff import DiffExtractor, alpha_check, clipping_check
+from image_diff.io import load_bgra
 from image_diff.visualize import run_visualize_and_report
 
 
@@ -54,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ssim-min", type=float, default=0.98, dest="ssim_min", metavar="F",
         help="SSIM がこの値未満のとき WARNING を出力する",
+    )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="フルモード: アルファ破壊チェック + 見切れチェックも実行する",
     )
     return parser
 
@@ -102,6 +107,35 @@ def run(args: argparse.Namespace) -> int:
     print(f"\nOutput files:")
     print(f"  highlight  : {outputs['highlight_path']}")
     print(f"  report     : {outputs['report_path']}")
+
+    # --- --full モード: 拡張チェック ---
+    if args.full:
+        print("\n--- Full Mode: 拡張チェック ---")
+        try:
+            before_img = load_bgra(args.before)
+            after_img  = load_bgra(args.after)
+
+            # アルファ破壊チェック
+            ac = alpha_check(before_img, after_img)
+            alpha_icon = "⚠️ " if ac.blob_count > 0 else "✅"
+            print(f"{alpha_icon} alpha_check:")
+            print(f"   destroyed_count : {ac.destroyed_count:,} px")
+            print(f"   blob_count      : {ac.blob_count}")
+            print(f"   ratio           : {ac.ratio:.4f} ({ac.ratio*100:.2f}%)")
+            if ac.blobs:
+                for b in ac.blobs[:3]:  # 最大3件表示
+                    print(f"   blob label={b['label']} area={b['area']} bbox={b['bbox']}")
+                if len(ac.blobs) > 3:
+                    print(f"   ... and {len(ac.blobs)-3} more blob(s)")
+
+            # 見切れチェック
+            cc = clipping_check(result.diff_mask)
+            clip_icon = "⚠️ " if cc.clipping_score > 0.05 else "✅"
+            print(f"{clip_icon} clipping_check:")
+            print(f"   {cc.detail}")
+
+        except Exception as e:
+            print(f"[WARNING] 拡張チェック中にエラー: {e}", file=sys.stderr)
 
     return 1 if v == "FAIL" else 0
 
