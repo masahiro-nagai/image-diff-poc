@@ -255,12 +255,14 @@ image-diff-poc/
 ├── .venv/                  # 仮想環境（git 管理外）
 ├── image_diff/             # ライブラリ本体
 │   ├── __init__.py
+│   ├── __main__.py         # python -m image_diff エントリポイント
+│   ├── cli.py              # argparse CLI ロジック
 │   ├── io.py               # load_bgra, validate_pair
-│   └── diff.py             # DiffExtractor, DiffResult
+│   ├── diff.py             # DiffExtractor, DiffResult, alpha_check, clipping_check
+│   └── visualize.py        # visualize_diff, generate_report, run_visualize_and_report
 ├── output/                 # 出力先
-│   ├── test.png
-│   ├── diff_mask.png       # 差分 2値マスク
-│   └── diff_overlay.png    # 差分オーバーレイ画像
+│   ├── diff_highlight.png  # 差分ハイライト画像
+│   └── report.csv          # verdict / diff_score / ssim_score レポート
 ├── samples/                # ダミー画像
 │   ├── before.png
 │   └── after.png
@@ -268,6 +270,8 @@ image-diff-poc/
 ├── test_env.py
 ├── test_io.py
 ├── test_diff.py            # DiffExtractor 検証
+├── test_viz.py             # 可視化・レポート検証
+├── test_extensions.py      # alpha_check / clipping_check 検証
 ├── requirements.txt
 └── README.md
 ```
@@ -438,14 +442,13 @@ image-diff-poc/
 ├── .venv/
 ├── image_diff/
 │   ├── __init__.py
-│   ├── io.py           # load_bgra, validate_pair
-│   ├── diff.py         # DiffExtractor, DiffResult
-│   └── visualize.py    # visualize_diff, generate_report
+│   ├── __main__.py         # python -m image_diff エントリポイント
+│   ├── cli.py              # argparse CLI ロジック
+│   ├── io.py               # load_bgra, validate_pair
+│   ├── diff.py             # DiffExtractor, DiffResult, alpha_check, clipping_check
+│   └── visualize.py        # visualize_diff, generate_report, run_visualize_and_report
 ├── output/
-│   ├── test.png
-│   ├── diff_mask.png
-│   ├── diff_overlay.png
-│   └── diff_highlight.png
+│   ├── diff_highlight.png
 │   └── report.csv
 ├── samples/
 │   ├── before.png
@@ -455,6 +458,7 @@ image-diff-poc/
 ├── test_io.py
 ├── test_diff.py
 ├── test_viz.py
+├── test_extensions.py
 ├── requirements.txt
 └── README.md
 ```
