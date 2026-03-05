@@ -13,3 +13,6 @@ __pycache__/
 # エディタ
 .vscode/
 .idea/
+
+# 出力ファイル
+output/

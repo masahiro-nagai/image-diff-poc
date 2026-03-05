@@ -1,2 +1,0 @@
-file_pair,verdict,diff_score,ssim_score,reason,highlight_path,mask_path,overlay_path
-samples/before.png vs samples/before.png,PASS,0.0,1.0,diff_score < 0.1%: 実質的な差分なし,output/diff_highlight.png,output/diff_mask.png,output/diff_overlay.png
